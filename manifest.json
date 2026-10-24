@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "predmaxim.jira",
+  "name": "Jira",
+  "version": "1.0.0",
+  "author": "predmaxim",
+  "description": "My Jira Server issues in one project: a list and an editable issue card",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Jira",
+    "description": "My Jira issues",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

@@ -1,0 +1,45 @@
+#!/bin/bash
+# jira login BASE                 — read a personal access token from stdin into the keyring
+# jira METHOD BASE PATH [JSON]    — call Jira with that token; the response body goes to stdout
+# jira download BASE URL NAME     — save an attachment to the Downloads folder; prints the path
+# The token never reaches argv: curl reads the header from stdin.
+set -euo pipefail
+service=predmaxim.jira
+
+if [[ $1 == login ]]; then
+  IFS= read -r token || true
+  [[ -n $token ]] || { echo "empty token" >&2; exit 2; }
+  printf %s "$token" | secret-tool store --label "Jira $2" service "$service" url "$2"
+  exit
+fi
+
+token() {
+  secret-tool lookup service "$service" url "$1" || { echo "no token — set it in the settings (gear)" >&2; exit 3; }
+}
+
+if [[ $1 == download ]]; then
+  base=$2 url=$3 name=${4//\//_}
+  # The token goes only to the Jira it belongs to.
+  [[ $url == "$base/"* ]] || { echo "the attachment isn't on this Jira" >&2; exit 2; }
+  [[ -n $name && $name != . && $name != .. ]] || name=attachment
+  dir=$(xdg-user-dir DOWNLOAD 2>/dev/null || echo "$HOME/Downloads")
+  mkdir -p "$dir"
+  # Never overwrite: "a.pdf" is taken → "a (1).pdf", "a (2).pdf", …
+  stem=$name ext=
+  [[ $name == ?*.* ]] && stem=${name%.*} ext=.${name##*.}
+  dest=$dir/$name n=0
+  while [[ -e $dest ]]; do dest="$dir/$stem ($((++n)))$ext"; done
+  # A half-downloaded file never sits under the real name.
+  t=$(token "$base")
+  printf 'Authorization: Bearer %s\n' "$t" |
+    curl -sS --fail --max-time 300 -H @- -o "$dest.part" "$url" || { rm -f "$dest.part"; exit 1; }
+  mv "$dest.part" "$dest"
+  echo "$dest"
+  exit
+fi
+
+method=$1 base=$2 path=$3 body=${4-}
+args=(-sS --fail-with-body --max-time 30 -X "$method" -H @- -H "Accept: application/json" "$base$path")
+[[ -n $body ]] && args+=(-H "Content-Type: application/json" --data-raw "$body")
+t=$(token "$base")
+printf 'Authorization: Bearer %s\n' "$t" | curl "${args[@]}"
