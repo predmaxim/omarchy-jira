@@ -49,14 +49,16 @@ Flickable {
   //      stand on screen. Enter does it; a text field takes the keys.
   property int keyRow: 0
   property int keyCol: 0
+  readonly property bool inCard: !!jira && jira.zone === "card"
   readonly property var keyRows: [
     [openButton, flagButton, backButton], [parentKey, keyText], [summaryText, editButton], [linkText],
-    [assignButton, statusBox], [priorityBox, typeBox, pointsField, epicText, epicField], [labelsField], [attachmentsButton]
-  ].concat(rowsOf(fileRepeater), rowsOf(subRepeater), [[commentsButton], [commentField], [commentButton, flagCommentButton]])
+    [assignButton, statusBox], [priorityBox, typeBox, pointsField, epicText, epicField], [labelsField]
+  ].concat(linkRows(descText), [[attachmentsButton]], rowsOf(fileRepeater), rowsOf(subRepeater),
+           [[commentsButton], [commentField], [commentButton, flagCommentButton]], commentLinkRows())
     .map(function(r) { return r.filter(function(i) { return i && i.visible && i.enabled }) })
     .filter(function(r) { return r.length > 0 })
   readonly property var keyItem: {
-    if (!jira || jira.zone !== "card" || !keyRows.length) return null
+    if (!inCard || !keyRows.length) return null
     var row = keyRows[Math.min(keyRow, keyRows.length - 1)]
     return row[Math.min(keyCol, row.length - 1)]
   }
@@ -69,10 +71,53 @@ Flickable {
     return rows
   }
 
+  // The links of the description and the comments, one row each. A link is
+  // no item: it carries what keyRows needs (visible, enabled, activate) and
+  // its place for scrolling (box).
+  function linkRows(edit) {
+    if (!root.inCard || !edit.visible) return []
+    return edit.links.map(function(l) {
+      return [{ edit: edit, start: l.start, end: l.end, visible: true, enabled: true,
+                activate: function() { root.jira.openLink(l.link) },
+                box: function() {
+                  var a = edit.positionToRectangle(l.start), b = edit.positionToRectangle(l.end)
+                  return { y: edit.mapToItem(column, 0, a.y).y, h: b.y + b.height - a.y }
+                } }]
+    })
+  }
+
+  function commentLinkRows() {
+    var rows = []
+    for (var i = 0; i < commentRepeater.count; i++) {
+      var c = commentRepeater.itemAt(i)
+      if (c) rows = rows.concat(root.linkRows(c.richText))
+    }
+    return rows
+  }
+
+  // Links are looked for only while the cursor is in the card, not while the arrows walk the list.
+  onInCardChanged: if (inCard) {
+    descText.scanLinks()
+    for (var i = 0; i < commentRepeater.count; i++) if (commentRepeater.itemAt(i)) commentRepeater.itemAt(i).richText.scanLinks()
+  }
+
+  // The link under the cursor shows as selected text.
+  property Item linkEdit: null
+  onKeyItemChanged: {
+    if (root.linkEdit) root.linkEdit.deselect()
+    root.linkEdit = root.keyItem && root.keyItem.edit ? root.keyItem.edit : null
+    if (root.linkEdit) root.linkEdit.select(root.keyItem.start, root.keyItem.end)
+  }
+
+  // Where a target stands in the card: an item, or a link's own box.
+  function box(item) {
+    return item.box ? item.box() : { y: item.mapToItem(column, 0, 0).y, h: item.height }
+  }
+
   // The cursor lands on the first row in sight (the top one after a new issue).
   function keyEnter() {
     var rows = root.keyRows, i = 0
-    while (i < rows.length - 1 && rows[i][0].mapToItem(column, 0, 0).y < root.contentY) i++
+    while (i < rows.length - 1 && root.box(rows[i][0]).y < root.contentY) i++
     root.keyRow = i
     root.keyCol = 0
     if (rows.length) root.show(rows[i][0])
@@ -113,8 +158,8 @@ Flickable {
   }
 
   function near(item, dy) {
-    var y = item.mapToItem(column, 0, 0).y
-    return dy > 0 ? y + item.height <= root.contentY + root.height + root.step : y >= root.contentY - root.step
+    var b = root.box(item)
+    return dy > 0 ? b.y + b.h <= root.contentY + root.height + root.step : b.y >= root.contentY - root.step
   }
 
   function scrollBy(dy) {
@@ -125,10 +170,10 @@ Flickable {
   }
 
   function show(item) {
-    var y = item.mapToItem(column, 0, 0).y, pad = Style.space(12)
-    if (y - pad < root.contentY) root.contentY = Math.max(0, y - pad)
-    else if (y + item.height + pad > root.contentY + root.height)
-      root.contentY = Math.max(0, Math.min(root.contentHeight - root.height, y + item.height + pad - root.height))
+    var b = root.box(item), pad = Style.space(12)
+    if (b.y - pad < root.contentY) root.contentY = Math.max(0, b.y - pad)
+    else if (b.y + b.h + pad > root.contentY + root.height)
+      root.contentY = Math.max(0, Math.min(root.contentHeight - root.height, b.y + b.h + pad - root.height))
   }
 
   Column {
@@ -462,23 +507,13 @@ Flickable {
     // ---- Description.
     Section {
       visible: !!(root.card && root.card.description)
-      TextEdit {
+      RichText {
+        id: descText
         visible: !!(root.card && root.card.description)
-        width: parent.width
-        readOnly: true
-        selectByMouse: true
-        textFormat: TextEdit.RichText
         // Jira's own rendering when it came with the issue, else the markup with its links made live.
         text: !root.card ? "" : root.card.descriptionHtml
               ? Model.richDescription(root.card.descriptionHtml, root.jira.baseUrl, String(Color.accent))
               : Model.linkify(root.card.description, String(Color.accent))
-        onLinkActivated: function(link) { root.jira.openLink(link) }
-
-        HoverHandler { cursorShape: parent.hoveredLink ? Qt.PointingHandCursor : Qt.IBeamCursor }
-        wrapMode: TextEdit.Wrap
-        color: root.fg
-        font.family: root.ff
-        font.pixelSize: Style.font.title
       }
     }
 
@@ -666,10 +701,12 @@ Flickable {
         }
 
         Repeater {
+          id: commentRepeater
           model: root.commentsOpen && root.jira.comments ? root.jira.comments : []
 
           Column {
             required property var modelData
+            readonly property Item richText: commentBody
             width: parent.width
             spacing: Style.space(6)
             bottomPadding: Style.space(10)
@@ -681,18 +718,9 @@ Flickable {
               font.pixelSize: Style.font.body
               font.bold: true
             }
-            TextEdit {
-              width: parent.width
-              readOnly: true
-              selectByMouse: true
-              textFormat: TextEdit.RichText
+            RichText {
+              id: commentBody
               text: modelData.html
-              onLinkActivated: function(link) { root.jira.openLink(link) }
-              HoverHandler { cursorShape: parent.hoveredLink ? Qt.PointingHandCursor : Qt.IBeamCursor }
-              wrapMode: TextEdit.Wrap
-              color: root.fg
-              font.family: root.ff
-              font.pixelSize: Style.font.title
             }
           }
         }
@@ -753,6 +781,44 @@ Flickable {
       anchors.fill: parent
       cursorShape: Qt.PointingHandCursor
       onClicked: c.activate()
+    }
+  }
+
+  // Rich text with live links: the description, a comment. Its links are
+  // cursor targets too (linkRows), found by asking the layout which link
+  // stands at each character (about 30 ms for 7000 characters).
+  component RichText: TextEdit {
+    id: rich
+    property var links: []
+    property string scannedText: ""
+    width: parent.width
+    readOnly: true
+    selectByMouse: true
+    textFormat: TextEdit.RichText
+    wrapMode: TextEdit.Wrap
+    color: root.fg
+    selectionColor: Style.selectionFillFor(root.fg, Color.accent)
+    selectedTextColor: root.fg
+    font.family: root.ff
+    font.pixelSize: Style.font.title
+    onLinkActivated: function(link) { root.jira.openLink(link) }
+    onTextChanged: if (root.inCard) Qt.callLater(function() { rich.scanLinks() })
+    Component.onCompleted: if (root.inCard) Qt.callLater(function() { rich.scanLinks() })
+    HoverHandler { cursorShape: rich.hoveredLink ? Qt.PointingHandCursor : Qt.IBeamCursor }
+
+    // Runs of one link; one wrapped onto the next line stays one run.
+    function scanLinks() {
+      if (rich.scannedText === rich.text) return
+      var out = [], cur = null
+      for (var p = 0; p < rich.length; p++) {
+        var a = rich.positionToRectangle(p), b = rich.positionToRectangle(p + 1)
+        var l = rich.linkAt(b.y === a.y && b.x > a.x ? (a.x + b.x) / 2 : a.x + 1, a.y + a.height / 2)
+        if (!l) continue
+        if (cur && cur.link === l && p - cur.end <= 1) cur.end = p + 1
+        else out.push(cur = { start: p, end: p + 1, link: l })
+      }
+      rich.scannedText = rich.text
+      rich.links = out
     }
   }
 

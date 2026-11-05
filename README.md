@@ -10,12 +10,10 @@ Letters always go to the search field. The cursor walks the whole window:
 
 - ↑/↓ — the list; the card follows the issue under the cursor
 - ↑ from the first row — the header buttons, ←/→ along them, ↓ back to the list
-- → or Tab — the card: ↑/↓ along its buttons and links as they stand on screen, ←/→ within a row, ← from the first one back to the list; a row farther than a third of the card away scrolls the card first, so a long description reads with the arrows
+- → or Tab — the card: ↑/↓ along its buttons and links as they stand on screen (links inside the description and comments too, the one under the cursor shown selected), ←/→ within a row, ← from the first one back to the list; a row farther than a third of the card away scrolls the card first, so a long description reads with the arrows
 - Enter — what a click does (the status opens its list, the comment field takes typing; ↓/↑ leave it)
 - settings: ↑ from the address — Back, ↓ from the token — Save, → Cancel
 - Esc — a step back: settings → out of a card field → card or header to the list → back along the links followed → clear the search → close
-
-Links inside the description and comments open with the mouse only.
 
 ## Without the bar icon
 
