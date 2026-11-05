@@ -42,7 +42,93 @@ Flickable {
   // Another issue: a comment begun on this one doesn't go along.
   Connections {
     target: root.jira
-    function onCardKeyChanged() { root.attachmentsOpen = false; root.commentsOpen = false; root.editingSummary = false; commentField.text = ""; root.contentY = 0 }
+    function onCardKeyChanged() { root.attachmentsOpen = false; root.commentsOpen = false; root.editingSummary = false; commentField.text = ""; root.contentY = 0; root.keyRow = 0; root.keyCol = 0 }
+  }
+
+  // ---- Keys (Panel.navMove): what a click does here, in rows as they
+  //      stand on screen. Enter does it; a text field takes the keys.
+  property int keyRow: 0
+  property int keyCol: 0
+  readonly property var keyRows: [
+    [openButton, flagButton, backButton], [parentKey, keyText], [summaryText, editButton], [linkText],
+    [assignButton, statusBox], [priorityBox, typeBox, pointsField, epicText, epicField], [labelsField], [attachmentsButton]
+  ].concat(rowsOf(fileRepeater), rowsOf(subRepeater), [[commentsButton], [commentField], [commentButton, flagCommentButton]])
+    .map(function(r) { return r.filter(function(i) { return i && i.visible && i.enabled }) })
+    .filter(function(r) { return r.length > 0 })
+  readonly property var keyItem: {
+    if (!jira || jira.zone !== "card" || !keyRows.length) return null
+    var row = keyRows[Math.min(keyRow, keyRows.length - 1)]
+    return row[Math.min(keyCol, row.length - 1)]
+  }
+  // A step of the cursor, a third of the card.
+  readonly property real step: height / 3
+
+  function rowsOf(repeater) {
+    var rows = []
+    for (var i = 0; i < repeater.count; i++) rows.push([repeater.itemAt(i)])
+    return rows
+  }
+
+  // The cursor lands on the first row in sight (the top one after a new issue).
+  function keyEnter() {
+    var rows = root.keyRows, i = 0
+    while (i < rows.length - 1 && rows[i][0].mapToItem(column, 0, 0).y < root.contentY) i++
+    root.keyRow = i
+    root.keyCol = 0
+    if (rows.length) root.show(rows[i][0])
+  }
+
+  function keyTo(item) {
+    var r = root.keyRows.findIndex(function(row) { return row.indexOf(item) >= 0 })
+    if (r < 0) return
+    root.keyRow = r
+    root.keyCol = root.keyRows[r].indexOf(item)
+    root.jira.zone = "card"
+  }
+
+  // ↑/↓/←/→; "up" or "left" when the step leaves the card that way. A row
+  // farther than a step away scrolls the card a step instead, so a long
+  // description or the comments under the last row can be read.
+  function keyMove(dx, dy) {
+    var rows = root.keyRows
+    if (!rows.length) return dx < 0 ? "left" : dy < 0 ? "up" : ""
+    var r = Math.min(root.keyRow, rows.length - 1)
+    var next = Model.gridStep(rows, r, Math.min(root.keyCol, rows[r].length - 1), dx, dy)
+    if (!next) return dy && root.scrollBy(dy) ? "" : dx < 0 ? "left" : dy < 0 ? "up" : ""
+    var item = rows[next.row][next.col]
+    if (dy && !root.near(item, dy)) { root.scrollBy(dy); return "" }
+    root.keyRow = next.row
+    root.keyCol = next.col
+    root.show(item)
+    return ""
+  }
+
+  function keyActivate() {
+    var it = root.keyItem
+    if (!it) return
+    if (typeof it.activate === "function") it.activate()   // texts and rows: what their click does
+    else if (typeof it.open === "function") it.open()       // a dropdown
+    else if (typeof it.clicked === "function") it.clicked() // a button
+    else it.forceActiveFocus()                              // a text field
+  }
+
+  function near(item, dy) {
+    var y = item.mapToItem(column, 0, 0).y
+    return dy > 0 ? y + item.height <= root.contentY + root.height + root.step : y >= root.contentY - root.step
+  }
+
+  function scrollBy(dy) {
+    var y = Math.max(0, Math.min(root.contentHeight - root.height, root.contentY + dy * root.step))
+    if (y === root.contentY) return false
+    root.contentY = y
+    return true
+  }
+
+  function show(item) {
+    var y = item.mapToItem(column, 0, 0).y, pad = Style.space(12)
+    if (y - pad < root.contentY) root.contentY = Math.max(0, y - pad)
+    else if (y + item.height + pad > root.contentY + root.height)
+      root.contentY = Math.max(0, Math.min(root.contentHeight - root.height, y + item.height + pad - root.height))
   }
 
   Column {
@@ -64,6 +150,7 @@ Flickable {
       }
 
       CardButton {
+        id: flagButton
         x: openButton.width + Style.space(8)
         visible: root.jira.ids.flagged !== ""
         text: root.card && root.card.flagged ? root.tr("Remove flag") : root.tr("Add flag")
@@ -83,6 +170,7 @@ Flickable {
       }
 
       CardButton {
+        id: backButton
         readonly property var last: root.jira.cardTrail[root.jira.cardTrail.length - 1]
         anchors.right: parent.right
         visible: !!last
@@ -113,6 +201,7 @@ Flickable {
         }
 
         Text {
+          id: parentKey
           visible: !!(root.card && root.card.parent)
           text: root.card ? root.card.parent + " / " : ""
           textFormat: Text.PlainText
@@ -120,13 +209,15 @@ Flickable {
           font.pixelSize: Style.font.body
           font.bold: true
           font.letterSpacing: 1.2
-          font.underline: parentHover.hovered
+          font.underline: parentHover.hovered || root.keyItem === parentKey
           color: root.fg
+          function activate() { root.jira.follow(root.card.parent) }
           HoverHandler { id: parentHover; cursorShape: Qt.PointingHandCursor }
-          TapHandler { onTapped: root.jira.follow(root.card.parent) }
+          TapHandler { onTapped: parentKey.activate() }
         }
 
         Copyable {
+          id: keyText
           text: root.card ? root.card.key + " · " + root.card.typeName : ""
           copyText: root.card ? root.card.key : ""
           what: "key"
@@ -161,6 +252,7 @@ Flickable {
           anchors.left: parent.left
           anchors.right: editButton.left
           anchors.rightMargin: Style.space(10)
+          hasCursor: root.keyItem === summaryField
           foreground: root.fg
           font.family: root.ff
           font.pixelSize: Style.font.heading
@@ -189,6 +281,7 @@ Flickable {
       }
 
       Copyable {
+        id: linkText
         text: root.card ? Model.browseUrl(root.jira.baseUrl, root.card.key) : ""
         what: "link"
         color: Qt.darker(root.fg, 1.4)
@@ -219,6 +312,7 @@ Flickable {
                 text: root.card && root.card.assigneeName || root.tr("Unassigned")
               }
               CardButton {
+                id: assignButton
                 visible: root.card && !root.card.mine
                 text: root.tr("Assign to me")
                 onClicked: root.jira.assignToMe()
@@ -230,6 +324,7 @@ Flickable {
             label: root.tr("Status").toUpperCase()
             Dropdown {
               id: statusBox
+              hasCursor: root.keyItem === statusBox
               width: fields.half
               showLabel: false
               foreground: root.fg
@@ -238,6 +333,8 @@ Flickable {
                 return { value: String(t.id), label: t.to && t.to.name !== t.name ? t.name + " → " + t.to.name : t.name }
               })) : []
               onChanged: function(v) { if (v) root.jira.move(v) }
+              // Its popup took the keys; they go back to the search field.
+              onPopupOpenChanged: if (!popupOpen) root.jira.keysHome()
             }
           }
         }
@@ -250,6 +347,7 @@ Flickable {
             Value { visible: !root.fullEdit; width: fields.quarter; text: root.card && root.card.priorityName || "—" }
             Dropdown {
               id: priorityBox
+              hasCursor: root.keyItem === priorityBox
               visible: root.fullEdit
               width: fields.quarter
               showLabel: false
@@ -265,6 +363,7 @@ Flickable {
             Value { visible: !root.fullEdit; width: fields.quarter; text: root.card && root.card.typeName || "—" }
             Dropdown {
               id: typeBox
+              hasCursor: root.keyItem === typeBox
               visible: root.fullEdit
               width: fields.quarter
               showLabel: false
@@ -283,6 +382,7 @@ Flickable {
             Value { visible: !root.fullEdit; width: fields.quarter; text: root.card && root.card.storyPoints || "—" }
             TextField {
               id: pointsField
+              hasCursor: root.keyItem === pointsField
               visible: root.fullEdit
               width: fields.quarter
               foreground: root.fg
@@ -303,16 +403,20 @@ Flickable {
             visible: root.jira.ids.epic !== "" && root.card && !root.card.subtask
             // The epic opens here, like a link to an issue.
             Value {
+              id: epicText
               visible: !root.fullEdit
+              enabled: !!(root.card && root.card.epic)
               width: Math.min(implicitWidth, fields.quarter)
               text: root.card && root.card.epic || "—"
               color: root.card && root.card.epic ? Color.accent : root.fg
-              font.underline: epicHover.hovered
-              HoverHandler { id: epicHover; enabled: !!(root.card && root.card.epic); cursorShape: Qt.PointingHandCursor }
-              TapHandler { enabled: !!(root.card && root.card.epic); onTapped: root.jira.follow(root.card.epic) }
+              font.underline: epicHover.hovered || root.keyItem === epicText
+              function activate() { root.jira.follow(root.card.epic) }
+              HoverHandler { id: epicHover; cursorShape: Qt.PointingHandCursor }
+              TapHandler { onTapped: epicText.activate() }
             }
             TextField {
               id: epicField
+              hasCursor: root.keyItem === epicField
               visible: root.fullEdit
               width: fields.quarter
               placeholderText: "DEMO-123"
@@ -341,6 +445,7 @@ Flickable {
             Value { visible: !root.fullEdit; width: fields.half; wrapMode: Text.Wrap; text: root.card && root.card.labels.join(", ") || "—" }
             TextField {
               id: labelsField
+              hasCursor: root.keyItem === labelsField
               visible: root.fullEdit
               width: fields.half
               placeholderText: root.tr("space-separated")
@@ -389,12 +494,14 @@ Flickable {
         spacing: Style.space(10)
 
         CardButton {
+          id: attachmentsButton
           text: root.tr("Attachments") + " · " + (root.card ? root.card.attachments.length : 0)
           iconText: root.attachmentsOpen ? "󰅃" : "󰅀"
           onClicked: root.attachmentsOpen = !root.attachmentsOpen
         }
 
         Repeater {
+          id: fileRepeater
           model: root.attachmentsOpen && root.card ? root.card.attachments : []
 
           CursorSurface {
@@ -404,14 +511,15 @@ Flickable {
             width: parent.width
             implicitHeight: fileName.implicitHeight + Style.space(18)
             foreground: root.fg
-            hasCursor: fileMouse.containsMouse
+            hasCursor: fileMouse.containsMouse || root.keyItem === file
+            function activate() { root.jira.download(file.modelData) }
 
             MouseArea {
               id: fileMouse
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: file.busy ? Qt.BusyCursor : Qt.PointingHandCursor
-              onClicked: root.jira.download(file.modelData)
+              onClicked: file.activate()
             }
 
             Text {
@@ -469,6 +577,7 @@ Flickable {
         }
 
         Repeater {
+          id: subRepeater
           model: root.card ? root.card.subtasks : []
 
           CursorSurface {
@@ -477,14 +586,15 @@ Flickable {
             width: parent.width
             implicitHeight: subText.implicitHeight + Style.space(18)
             foreground: root.fg
-            hasCursor: subMouse.containsMouse
+            hasCursor: subMouse.containsMouse || root.keyItem === sub
+            function activate() { root.jira.follow(sub.modelData.key) }
 
             MouseArea {
               id: subMouse
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: root.jira.follow(sub.modelData.key)
+              onClicked: sub.activate()
             }
 
             Text {
@@ -511,6 +621,7 @@ Flickable {
         spacing: Style.space(14)
 
         CardButton {
+          id: commentsButton
           text: root.tr("Comments") + (root.jira.comments ? " · " + root.jira.comments.length : "")
           iconText: root.commentsOpen ? "󰅃" : "󰅀"
           onClicked: {
@@ -524,6 +635,10 @@ Flickable {
           visible: root.commentsOpen
           width: parent.width
           placeholderText: root.tr("New comment")
+          hasCursor: root.keyItem === commentField
+          // Tab goes to the catcher (back to the list), not along Qt's focus chain.
+          activeFocusOnTab: false
+          onActiveFocusChanged: if (activeFocus) root.keyTo(commentField)
           foreground: root.fg
           font.family: root.ff
           font.pixelSize: Style.font.title
@@ -534,12 +649,14 @@ Flickable {
           visible: root.commentsOpen
           spacing: Style.space(10)
           CardButton {
+            id: commentButton
             text: root.tr("Comment")
             iconText: "󰆉"
             enabled: commentField.text.trim() !== ""
             onClicked: commentField.accepted()
           }
           CardButton {
+            id: flagCommentButton
             visible: root.jira.ids.flagged !== "" && root.card && !root.card.flagged
             text: root.tr("Flag and comment")
             iconText: "󰈻"
@@ -630,10 +747,12 @@ Flickable {
     color: root.fg
     font.family: root.ff
     font.pixelSize: Style.font.title
+    font.underline: root.keyItem === c
+    function activate() { root.jira.copy(c.copyText, c.what) }
     MouseArea {
       anchors.fill: parent
       cursorShape: Qt.PointingHandCursor
-      onClicked: root.jira.copy(c.copyText, c.what)
+      onClicked: c.activate()
     }
   }
 
@@ -646,6 +765,8 @@ Flickable {
 
   // The card's buttons: bordered, text and icon one step over the body text.
   component CardButton: Button {
+    id: cardButton
+    hasCursor: root.keyItem === cardButton
     foreground: root.fg
     fontFamily: root.ff
     fontSize: Style.font.title

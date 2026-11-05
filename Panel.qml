@@ -230,9 +230,9 @@ Panel {
     Qt.callLater(function() { list.positionViewAtIndex(i, mode) })
   }
 
-  // Up/Down walk the rows (Up past the first one leaves them) and the card
-  // follows them; typing stays in the search field. The mouse only lights a
-  // row up: on its way to the card it would change the card otherwise.
+  // Up/Down walk the rows and the card follows them; typing stays in the
+  // search field. The mouse only lights a row up: on its way to the card it
+  // would change the card otherwise.
   function moveCursor(step) {
     var i = Math.max(-1, Math.min(root.rows.length - 1, root.cursorIndex + step))
     root.cursorIndex = i
@@ -240,6 +240,11 @@ Panel {
     if (i < 0) return
     list.positionViewAtIndex(i, ListView.Contain)
     if (!root.rows[i].group) root.pick(root.rows[i].key)
+  }
+
+  function hoverRow(i) {
+    root.zone = "list"
+    root.cursorIndex = i
   }
 
   // Enter on a heading folds it, on an issue opens the card, as a click does;
@@ -251,11 +256,133 @@ Panel {
     else root.pick(row.key)
     return true
   }
-  function enter(event) { if (!root.activate()) event.accepted = false }
+
+  // ---- Keys beyond the list. The cursor stands in one of three places:
+  //      the list, the header buttons (↑ from the first row; ←/→ along
+  //      them) or the card (→ or Tab; Card.keyMove). The search field keeps the
+  //      keyboard, so letters always search; the settings page has its own
+  //      rows (settingsMove).
+  property string zone: "list"
+  property int headCol: 0
+  // On the settings page a field holds the keys itself; on a button (Back
+  // over the fields, Save and Cancel under them) the key catcher does.
+  property var settingsCursor: null
+  // What the cursor stands on off the list and the card (that one has its
+  // own, Card.keyItem): a header button by place (headPress), or Save or Cancel.
+  readonly property var keyItem: root.settingsOpen ? (keys.activeFocus ? root.settingsCursor : null)
+    : root.zone === "head" ? root.headCol : null
+
+  // The header buttons by place, 0–3: mine, subtasks, refresh, the gear
+  // (Back on the settings page). They live in PanelHero's trailing
+  // component, out of reach by id, so the keys press them through here.
+  function headPress(i) {
+    if (i === 0) root.persist({ onlyMine: !root.onlyMine })
+    else if (i === 1) root.persist({ hideSubtasks: !root.hideSubtasks })
+    else if (i === 2) root.refresh()
+    else if (root.settingsOpen) root.back()
+    else root.settingsOpen = true
+  }
+
+  function toHead() {
+    root.zone = "head"
+    root.cursorIndex = -1
+  }
+
+  // Back to the list, the cursor on the open card's row.
+  function toList() {
+    root.zone = "list"
+    var i = root.rows.findIndex(function(r) { return !r.group && r.key === root.cardKey })
+    if (i < 0) return
+    root.cursorIndex = i
+    list.positionViewAtIndex(i, ListView.Contain)
+  }
+
+  function toCard() {
+    if (!root.cardData) return
+    root.zone = "card"
+    cardView.keyEnter()
+  }
+
+  // Tab: between the list and the card.
+  function switchPane() {
+    if (root.zone === "card" || cardPane.activeFocus) {
+      searchField.forceActiveFocus()
+      root.toList()
+    } else root.toCard()
+  }
+
+  function navMove(dx, dy) {
+    if (root.settingsOpen) { root.settingsMove(dx, dy); return }
+    // A field or the text of the card holds the keys: ↑/↓ take them back
+    // to the card's cursor, ←/→ past the end of a field's text do nothing.
+    if (cardPane.activeFocus) {
+      if (!dy) return
+      searchField.forceActiveFocus()
+      root.zone = "card"
+    }
+    if (root.zone === "head") {
+      if (dy > 0) { root.zone = "list"; root.moveCursor(1) }
+      else if (dx) root.headCol = Math.max(0, Math.min(3, root.headCol + dx))
+    } else if (root.zone === "card") {
+      var out = cardView.keyMove(dx, dy)
+      if (out === "up") root.toHead()
+      else if (out === "left") root.toList()
+    } else if (dx > 0) root.toCard()
+    else if (dy < 0 && root.cursorIndex <= 0) root.toHead()
+    else if (dy) root.moveCursor(dy)
+  }
+
+  // Enter (and Space off the list): false when nothing took it, so the
+  // search field searches.
+  function navActivate() {
+    if (root.settingsOpen) {
+      var c = root.settingsCursor
+      if (typeof c === "number") root.headPress(c)
+      else if (c) c.clicked()
+      return true
+    }
+    if (root.zone === "head") { root.headPress(root.headCol); return true }
+    if (root.zone === "card") { cardView.keyActivate(); return true }
+    return root.activate()
+  }
+
+  // The keys the search field hands on (before it edits its text): the
+  // arrows, Tab, Enter; Space off the list. ←/→ edit the text while no row
+  // is under the cursor.
+  function searchKey(event) {
+    var k = event.key
+    if (k === Qt.Key_Tab || k === Qt.Key_Backtab) { root.switchPane(); return true }
+    if (k === Qt.Key_Up || k === Qt.Key_Down) { root.navMove(0, k === Qt.Key_Down ? 1 : -1); return true }
+    if ((k === Qt.Key_Left || k === Qt.Key_Right) && (root.zone !== "list" || root.cursorIndex >= 0)) {
+      root.navMove(k === Qt.Key_Right ? 1 : -1, 0)
+      return true
+    }
+    if (k === Qt.Key_Return || k === Qt.Key_Enter || (k === Qt.Key_Space && root.zone !== "list")) return root.navActivate()
+    return false
+  }
+
+  // The settings page: Back, the three fields, then Save and Cancel.
+  function settingsMove(dx, dy) {
+    var fields = [urlField, projectField, tokenField]
+    var grid = [[3], [urlField], [projectField], [tokenField], [saveButton, cancelButton].filter(function(b) { return b.visible })]
+    var at = keys.activeFocus ? root.settingsCursor : fields.find(function(f) { return f.activeFocus })
+    var row = grid.findIndex(function(r) { return r.indexOf(at) >= 0 })
+    var next = row < 0 ? { row: 1, col: 0 } : Model.gridStep(grid, row, grid[row].indexOf(at), dx, dy)
+    if (!next) return
+    var item = grid[next.row][next.col]
+    if (fields.indexOf(item) >= 0) item.forceActiveFocus()
+    else {
+      root.settingsCursor = item
+      keys.forceActiveFocus()
+    }
+  }
 
   PointerMoveGate { id: pointerGate; referenceItem: listSurface }
 
   onRowsChanged: if (root.cursorIndex >= root.rows.length) root.cursorIndex = -1
+
+  // The keys back in the search field (the card's dropdown closed).
+  function keysHome() { searchField.forceActiveFocus() }
 
   function closeCard() {
     root.cardKey = ""
@@ -476,18 +603,21 @@ Panel {
     }
   }
 
-  // Esc: settings → out of a card field back to the search → back along the
-  // links followed → clear the search → close.
+  // Esc: settings → out of a card field to the card's cursor → from the card
+  // or the header to the list → back along the links followed → clear the
+  // search → close.
   function back() {
     if (root.settingsOpen && root.configured) { root.settingsOpen = false; searchField.forceActiveFocus() }
-    else if (cardPane.activeFocus) searchField.forceActiveFocus()
+    else if (cardPane.activeFocus) { searchField.forceActiveFocus(); root.zone = "card" }
+    else if (root.zone === "card") root.toList()
+    else if (root.zone === "head") root.zone = "list"
     else if (root.cardTrail.length) root.backCard()
     else if (searchField.text) searchField.text = ""
     else root.close()
   }
 
   onOpenedChanged: {
-    if (!opened) { root.settingsOpen = false; root.closeCard(); root.cursorIndex = -1; return }
+    if (!opened) { root.settingsOpen = false; root.closeCard(); root.cursorIndex = -1; root.zone = "list"; return }
     Qt.callLater(function() { (root.settingsOpen ? urlField : searchField).forceActiveFocus() })
     if (!root.configured) root.settingsOpen = true
     else if (!root.loading) {
@@ -576,12 +706,15 @@ Panel {
         anchors.rightMargin: listSurface.contentRightInset
         anchors.bottomMargin: listSurface.contentBottomInset
         anchors.leftMargin: listSurface.contentLeftInset
-        // The search field keeps its own ↑/↓/Enter, so letters (j/k too) go
-        // into it; Esc falls through to here. Tab and Delete do nothing. Keys
-        // from a field of the card stay its own: the list mustn't move under
-        // a comment being typed.
-        onMoveRequested: function(dx, dy) { if (dy && !root.settingsOpen && !cardPane.activeFocus) root.moveCursor(dy) }
-        onActivateRequested: if (!root.settingsOpen && !cardPane.activeFocus) root.activate()
+        // The keys no field took: from the catcher itself (a settings
+        // button under the cursor), a field of the card or settings, the
+        // card's text. The search field hands its own on (searchKey), so
+        // letters (j/k too) go into it. Delete does nothing. Enter only
+        // when the catcher holds the keys: a field's Enter (save, comment)
+        // comes up here after the field has done it.
+        onMoveRequested: function(dx, dy) { root.navMove(dx, dy) }
+        onActivateRequested: if (keys.activeFocus) root.navActivate()
+        onTabRequested: function(d) { if (root.settingsOpen) root.settingsMove(0, d); else root.switchPane() }
         onCloseRequested: root.back()
 
         PanelHero {
@@ -615,6 +748,7 @@ Panel {
             Button {
               anchors.verticalCenter: parent.verticalCenter
               visible: root.configured && !root.settingsOpen
+              hasCursor: root.keyItem === 0
               iconText: "󰀄"
               iconSize: Style.font.subtitle * 1.5
               horizontalPadding: Style.space(5)
@@ -625,12 +759,13 @@ Panel {
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
               selected: root.onlyMine
-              onClicked: root.persist({ onlyMine: !root.onlyMine })
+              onClicked: root.headPress(0)
             }
 
             Button {
               anchors.verticalCenter: parent.verticalCenter
               visible: root.configured && !root.settingsOpen
+              hasCursor: root.keyItem === 1
               iconText: "󰙅"
               iconSize: Style.font.subtitle * 1.5
               horizontalPadding: Style.space(5)
@@ -641,12 +776,13 @@ Panel {
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
               selected: root.hideSubtasks
-              onClicked: root.persist({ hideSubtasks: !root.hideSubtasks })
+              onClicked: root.headPress(1)
             }
 
             Button {
               anchors.verticalCenter: parent.verticalCenter
               visible: root.configured && !root.settingsOpen
+              hasCursor: root.keyItem === 2
               iconText: "󰑐"
               iconSize: Style.font.subtitle * 1.5
               horizontalPadding: Style.space(5)
@@ -657,11 +793,12 @@ Panel {
               tooltipText: root.tr("Refresh")
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
-              onClicked: root.refresh()
+              onClicked: root.headPress(2)
             }
 
             Button {
               anchors.verticalCenter: parent.verticalCenter
+              hasCursor: root.keyItem === 3
               iconText: root.settingsOpen ? "󰁍" : "󰒓"
               iconSize: Style.font.subtitle * 1.5
               horizontalPadding: Style.space(5)
@@ -671,7 +808,7 @@ Panel {
               tooltipText: root.settingsOpen ? root.tr("Back") : root.tr("Connection")
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
-              onClicked: root.settingsOpen ? root.back() : (root.settingsOpen = true)
+              onClicked: root.headPress(3)
             }
           }
         }
@@ -772,6 +909,8 @@ Panel {
             Row {
               spacing: Style.space(8)
               Button {
+                id: saveButton
+                hasCursor: root.keyItem === saveButton
                 text: root.tr("Save")
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
@@ -780,7 +919,9 @@ Panel {
                 onClicked: root.saveSettings(urlField.text, projectField.text, tokenField.text)
               }
               Button {
+                id: cancelButton
                 visible: root.configured
+                hasCursor: root.keyItem === cancelButton
                 text: root.tr("Cancel")
                 foreground: root.bar.foreground
                 fontFamily: root.bar.fontFamily
@@ -825,11 +966,8 @@ Panel {
               font.pixelSize: Style.font.heading
               // No caret, like the launcher: the field always holds the keyboard.
               cursorDelegate: Item {}
-              onTextEdited: { root.cursorIndex = -1; root.followKey = "" }
-              Keys.onUpPressed: root.moveCursor(-1)
-              Keys.onDownPressed: root.moveCursor(1)
-              Keys.onReturnPressed: function(event) { root.enter(event) }
-              Keys.onEnterPressed: function(event) { root.enter(event) }
+              onTextEdited: { root.cursorIndex = -1; root.zone = "list"; root.followKey = "" }
+              Keys.onPressed: function(event) { event.accepted = root.searchKey(event) }
               onTextChanged: text.trim() ? searchTimer.restart() : root.search()
               onAccepted: { searchTimer.stop(); root.search() }
             }
@@ -872,7 +1010,7 @@ Panel {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onPositionChanged: function(mouse) { if (pointerGate.moved(groupArea, mouse)) root.cursorIndex = entry.index }
+                    onPositionChanged: function(mouse) { if (pointerGate.moved(groupArea, mouse)) root.hoverRow(entry.index) }
                     onClicked: root.toggleGroup(entry.modelData.column)
                   }
 
@@ -938,7 +1076,7 @@ Panel {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onPositionChanged: function(mouse) { if (pointerGate.moved(rowArea, mouse)) root.cursorIndex = entry.index }
+                    onPositionChanged: function(mouse) { if (pointerGate.moved(rowArea, mouse)) root.hoverRow(entry.index) }
                     onClicked: root.pick(row.modelData.key)
                   }
 

@@ -248,3 +248,16 @@ function comments(d, base, color) {
     }
   }).reverse()
 }
+
+// The keyboard cursor over rows of controls (the card, the settings page):
+// ↑/↓ change rows, keeping the column as far as the new row reaches; ←/→ go
+// along one. null when the step leaves the rows: the caller decides where to
+// (the header above, the list on the left).
+function gridStep(rows, row, col, dx, dy) {
+  if (dy) {
+    var r = row + dy
+    return r < 0 || r >= rows.length ? null : { row: r, col: Math.min(col, rows[r].length - 1) }
+  }
+  var c = col + dx
+  return c < 0 || c >= rows[row].length ? null : { row: row, col: c }
+}

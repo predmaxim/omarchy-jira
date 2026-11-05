@@ -1,8 +1,18 @@
 // node test.js
 const fs = require("fs")
 const src = fs.readFileSync(__dirname + "/Model.js", "utf8").replace(".pragma library", "")
-const M = new Function(src + "; return { normalizeUrl, browseUrl, linkedIssue, boardUrl, searchKeys, foundRows, fieldIds, requestFields, card, board, parseLabels, parsePoints, errorText, boardJql, listRows, linkify, typeKind, richDescription, sizeText, cachePlan, comments }")()
+const M = new Function(src + "; return { normalizeUrl, browseUrl, linkedIssue, boardUrl, searchKeys, foundRows, fieldIds, requestFields, card, board, parseLabels, parsePoints, errorText, boardJql, listRows, linkify, typeKind, richDescription, sizeText, cachePlan, comments, gridStep }")()
 const assert = require("assert")
+
+// The keyboard cursor over rows of controls; null past an edge.
+const grid = [["open", "flag", "back"], ["status"], ["a", "b"]]
+assert.deepStrictEqual(M.gridStep(grid, 0, 2, 0, 1), { row: 1, col: 0 })
+assert.deepStrictEqual(M.gridStep(grid, 1, 0, 0, 1), { row: 2, col: 0 })
+assert.deepStrictEqual(M.gridStep(grid, 0, 1, 1, 0), { row: 0, col: 2 })
+assert.strictEqual(M.gridStep(grid, 0, 2, 1, 0), null)
+assert.strictEqual(M.gridStep(grid, 0, 0, -1, 0), null)
+assert.strictEqual(M.gridStep(grid, 0, 0, 0, -1), null)
+assert.strictEqual(M.gridStep(grid, 2, 1, 0, 1), null)
 
 const cm = M.comments({ comments: [
   { id: 1, author: { displayName: "Ann" }, created: "2026-10-01T09:05:00.000+0300", body: "a", renderedBody: '<p>a <a href="/jira/x">x</a></p>' },
