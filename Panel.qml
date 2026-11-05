@@ -521,9 +521,14 @@ Panel {
   }
 
   // An icon of its own on the right of the bar: it has no state to light up
-  // among the indicators.
-  implicitWidth: barButton.implicitWidth
-  implicitHeight: barButton.implicitHeight
+  // among the indicators. With showIcon off the widget stays in the bar,
+  // hidden, for the modal and its IPC (a hotkey still opens Jira): the modal
+  // and the IPC target live in this widget, so taking it off the bar would
+  // take them too.
+  readonly property bool showIcon: setting("showIcon", true) !== false
+  visible: showIcon
+  implicitWidth: showIcon ? barButton.implicitWidth : 0
+  implicitHeight: showIcon ? barButton.implicitHeight : 0
 
   BarIconButton {
     id: barButton
